@@ -90,10 +90,10 @@ resource "aws_iam_role" "github_actions" {
   })
 
   tags = {
-    Name        = var.github_actions_role_name
-    Purpose     = "GitHub Actions Terraform deployments"
-    Repository  = var.github_repository
-    ManagedBy   = "terraform"
+    Name       = var.github_actions_role_name
+    Purpose    = "GitHub Actions Terraform deployments"
+    Repository = var.github_repository
+    ManagedBy  = "terraform"
   }
 }
 

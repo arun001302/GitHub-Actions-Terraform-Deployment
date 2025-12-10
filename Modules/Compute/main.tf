@@ -84,9 +84,9 @@ data "aws_ami" "amazon_linux_arm" {
 #------------------------------------------------------------------------------
 
 resource "aws_launch_template" "app" {
-  name_prefix   = "${local.name_prefix}-lt-"
-  description   = "Launch template for ${var.environment} application servers"
-  
+  name_prefix = "${local.name_prefix}-lt-"
+  description = "Launch template for ${var.environment} application servers"
+
   image_id      = var.instance_architecture == "arm64" ? data.aws_ami.amazon_linux_arm.id : data.aws_ami.amazon_linux.id
   instance_type = var.instance_type
 
@@ -115,7 +115,7 @@ resource "aws_launch_template" "app" {
 
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "required"  # Require IMDSv2
+    http_tokens                 = "required" # Require IMDSv2
     http_put_response_hop_limit = 1
     instance_metadata_tags      = "enabled"
   }
@@ -250,7 +250,7 @@ resource "aws_cloudwatch_metric_alarm" "cpu_high" {
   }
 
   alarm_description = "CPU utilization exceeded ${var.cpu_alarm_threshold}% for ${local.name_prefix}-${count.index + 1}"
-  
+
   alarm_actions = var.alarm_actions
   ok_actions    = var.alarm_actions
 
@@ -274,7 +274,7 @@ resource "aws_cloudwatch_metric_alarm" "status_check" {
   }
 
   alarm_description = "Status check failed for ${local.name_prefix}-${count.index + 1}"
-  
+
   alarm_actions = var.alarm_actions
   ok_actions    = var.alarm_actions
 

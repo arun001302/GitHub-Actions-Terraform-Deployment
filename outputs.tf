@@ -164,12 +164,12 @@ output "app_environment_variables" {
     DB_SECRET_ARN = module.database.secret_arn
 
     # AWS context
-    AWS_REGION = var.aws_region
+    AWS_REGION  = var.aws_region
     ENVIRONMENT = var.environment
 
     # Infrastructure references
-    VPC_ID              = module.networking.vpc_id
-    PRIVATE_SUBNET_IDS  = join(",", module.networking.private_subnet_ids)
+    VPC_ID             = module.networking.vpc_id
+    PRIVATE_SUBNET_IDS = join(",", module.networking.private_subnet_ids)
   }
 }
 
@@ -200,10 +200,10 @@ output "infrastructure_summary" {
     }
 
     database = {
-      engine        = var.db_engine
+      engine         = var.db_engine
       instance_class = var.db_instance_class
-      endpoint      = module.database.endpoint
-      multi_az      = var.db_multi_az
+      endpoint       = module.database.endpoint
+      multi_az       = var.db_multi_az
     }
   }
 }

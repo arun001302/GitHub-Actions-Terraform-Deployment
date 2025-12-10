@@ -20,7 +20,7 @@ locals {
     mysql    = 3306
     mariadb  = 3306
   }
-  
+
   db_port = var.db_port != null ? var.db_port : local.default_ports[var.engine]
 
   engine_family = {

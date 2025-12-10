@@ -118,9 +118,9 @@ module "database" {
   subnet_ids        = module.networking.private_subnet_ids
   security_group_id = module.security.rds_security_group_id
 
-  engine          = var.db_engine
-  engine_version  = var.db_engine_version
-  instance_class  = var.db_instance_class
+  engine         = var.db_engine
+  engine_version = var.db_engine_version
+  instance_class = var.db_instance_class
 
   allocated_storage     = var.db_allocated_storage
   max_allocated_storage = var.db_max_allocated_storage
