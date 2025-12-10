@@ -1,33 +1,10 @@
 #------------------------------------------------------------------------------
 # Terraform CI/CD Pipeline
 #------------------------------------------------------------------------------
-# Automated Infrastructure as Code deployment workflow.
-#
-# INDUSTRY CONTEXT:
-# This pipeline follows GitOps best practices:
-# - Infrastructure changes go through Pull Requests
-# - Automated validation catches errors early
-# - Plan output is posted to PR for review
-# - Apply requires manual approval (production safety)
-# - OIDC authentication (no long-lived secrets)
-#
-# Pipeline stages:
-# 1. Format Check - Ensures consistent code style
-# 2. Validate - Checks syntax and configuration
-# 3. Security Scan - Identifies misconfigurations (checkov/tflint)
-# 4. Plan - Preview infrastructure changes
-# 5. Apply - Deploy changes (manual approval required)
-#------------------------------------------------------------------------------
 
 name: "Terraform CI/CD Pipeline"
 
-#------------------------------------------------------------------------------
-# Triggers
-#------------------------------------------------------------------------------
-# When does this workflow run?
-
 on:
-  # Run on Pull Requests to main branch
   pull_request:
     branches:
       - main
@@ -36,7 +13,6 @@ on:
       - '**.tfvars'
       - '.github/workflows/terraform.yml'
 
-  # Run on push to main branch (after PR merge)
   push:
     branches:
       - main
@@ -45,7 +21,6 @@ on:
       - '**.tfvars'
       - '.github/workflows/terraform.yml'
 
-  # Allow manual trigger with environment selection
   workflow_dispatch:
     inputs:
       environment:
@@ -66,50 +41,20 @@ on:
           - plan
           - apply
 
-#------------------------------------------------------------------------------
-# Environment Variables
-#------------------------------------------------------------------------------
-
 env:
   TF_VERSION: "1.5.7"
   AWS_REGION: "us-east-1"
-  # Default to dev if not specified
   TF_ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
 
-#------------------------------------------------------------------------------
-# Permissions
-#------------------------------------------------------------------------------
-# Required for OIDC authentication with AWS.
-#
-# INDUSTRY CONTEXT:
-# These permissions allow GitHub Actions to:
-# - Request an OIDC token (id-token: write)
-# - Read repository contents (contents: read)
-# - Comment on Pull Requests (pull-requests: write)
-#------------------------------------------------------------------------------
-
 permissions:
-  id-token: write      # Required for OIDC
-  contents: read       # Required to checkout code
-  pull-requests: write # Required to comment on PRs
-
-#------------------------------------------------------------------------------
-# Jobs
-#------------------------------------------------------------------------------
+  id-token: write
+  contents: read
+  pull-requests: write
 
 jobs:
   #----------------------------------------------------------------------------
   # Job 1: Format Check
   #----------------------------------------------------------------------------
-  # Ensures all Terraform files follow consistent formatting.
-  #
-  # INDUSTRY CONTEXT:
-  # Consistent formatting:
-  # - Makes code reviews easier
-  # - Reduces merge conflicts
-  # - Enforces team standards
-  #----------------------------------------------------------------------------
-
   format:
     name: "Terraform Format"
     runs-on: ubuntu-latest
@@ -128,28 +73,15 @@ jobs:
         run: terraform fmt -check -recursive -diff
         continue-on-error: true
 
-      - name: Post Format Status to PR
-        if: github.event_name == 'pull_request' && steps.fmt.outcome == 'failure'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: '❌ **Terraform Format Check Failed**\n\nPlease run `terraform fmt -recursive` locally and commit the changes.'
-            })
-
       - name: Fail if Format Check Failed
         if: steps.fmt.outcome == 'failure'
-        run: exit 1
+        run: |
+          echo "::error::Terraform format check failed. Run 'terraform fmt -recursive' locally and commit the changes."
+          exit 1
 
   #----------------------------------------------------------------------------
   # Job 2: Validate
   #----------------------------------------------------------------------------
-  # Validates Terraform configuration syntax and consistency.
-  #----------------------------------------------------------------------------
-
   validate:
     name: "Terraform Validate"
     runs-on: ubuntu-latest
@@ -168,22 +100,11 @@ jobs:
         run: terraform init -backend=false
 
       - name: Terraform Validate
-        id: validate
         run: terraform validate -no-color
 
   #----------------------------------------------------------------------------
   # Job 3: Security Scan
   #----------------------------------------------------------------------------
-  # Scans Terraform code for security issues and best practices.
-  #
-  # INDUSTRY CONTEXT:
-  # Security scanning catches:
-  # - Unencrypted resources
-  # - Overly permissive IAM policies
-  # - Missing logging/monitoring
-  # - Public exposure of private resources
-  #----------------------------------------------------------------------------
-
   security:
     name: "Security Scan"
     runs-on: ubuntu-latest
@@ -200,44 +121,29 @@ jobs:
 
       - name: Initialize TFLint
         run: tflint --init
+        continue-on-error: true
 
       - name: Run TFLint
-        id: tflint
         run: tflint --recursive --format=compact
         continue-on-error: true
 
       - name: Run Checkov
-        id: checkov
         uses: bridgecrewio/checkov-action@v12
         with:
           directory: .
           framework: terraform
-          soft_fail: true  # Don't fail the build, just report
+          soft_fail: true
           output_format: cli
-          quiet: true      # Only show failed checks
+          quiet: true
+        continue-on-error: true
 
   #----------------------------------------------------------------------------
   # Job 4: Plan
   #----------------------------------------------------------------------------
-  # Creates an execution plan showing what changes will be made.
-  #
-  # INDUSTRY CONTEXT:
-  # The plan stage is critical for:
-  # - Reviewing changes before apply
-  # - Catching unintended modifications
-  # - Understanding blast radius of changes
-  # - Compliance and audit requirements
-  #----------------------------------------------------------------------------
-
   plan:
     name: "Terraform Plan"
     runs-on: ubuntu-latest
     needs: security
-    # Only run plan for specific events
-    if: |
-      github.event_name == 'pull_request' ||
-      github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch'
 
     outputs:
       plan_exit_code: ${{ steps.plan.outputs.exitcode }}
@@ -250,16 +156,7 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false  # Disable wrapper for better output handling
-
-      #------------------------------------------------------------------------
-      # OIDC Authentication
-      #------------------------------------------------------------------------
-      # Authenticate with AWS using OIDC (no access keys!)
-      #
-      # IMPORTANT: You must create the IAM OIDC role in AWS first.
-      # See the instructions below the workflow file.
-      #------------------------------------------------------------------------
+          terraform_wrapper: false
 
       - name: Configure AWS Credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -282,71 +179,9 @@ jobs:
           terraform plan \
             -var-file=environments/${{ env.TF_ENVIRONMENT }}.tfvars \
             -out=tfplan \
-            -detailed-exitcode \
             -no-color 2>&1 | tee plan_output.txt
+          echo "exitcode=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
         continue-on-error: true
-
-      - name: Save Plan Output
-        run: |
-          echo "## Terraform Plan Output" > plan_summary.md
-          echo '```' >> plan_summary.md
-          cat plan_output.txt >> plan_summary.md
-          echo '```' >> plan_summary.md
-
-      #------------------------------------------------------------------------
-      # Post Plan to Pull Request
-      #------------------------------------------------------------------------
-      # Makes it easy for reviewers to see what will change.
-      #------------------------------------------------------------------------
-
-      - name: Post Plan to PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const plan = fs.readFileSync('plan_output.txt', 'utf8');
-            const maxLength = 60000; // GitHub comment limit
-            
-            let planSummary = plan;
-            if (plan.length > maxLength) {
-              planSummary = plan.substring(0, maxLength) + '\n\n... (truncated)';
-            }
-            
-            const exitCode = '${{ steps.plan.outputs.exitcode }}';
-            let statusIcon = '✅';
-            let statusText = 'No changes detected';
-            
-            if (exitCode === '1') {
-              statusIcon = '❌';
-              statusText = 'Plan failed';
-            } else if (exitCode === '2') {
-              statusIcon = '⚠️';
-              statusText = 'Changes detected';
-            }
-            
-            const body = `## ${statusIcon} Terraform Plan - ${statusText}
-            
-            **Environment:** \`${{ env.TF_ENVIRONMENT }}\`
-            **Triggered by:** @${{ github.actor }}
-            
-            <details>
-            <summary>Click to expand plan output</summary>
-            
-            \`\`\`hcl
-            ${planSummary}
-            \`\`\`
-            
-            </details>
-            
-            *Plan generated at ${new Date().toISOString()}*`;
-            
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
 
       - name: Upload Plan Artifact
         uses: actions/upload-artifact@v4
@@ -357,35 +192,25 @@ jobs:
             plan_output.txt
           retention-days: 7
 
-      - name: Check Plan Status
-        if: steps.plan.outputs.exitcode == '1'
-        run: exit 1
+      - name: Post Plan Summary
+        run: |
+          echo "## Terraform Plan Summary" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          head -100 plan_output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
   #----------------------------------------------------------------------------
   # Job 5: Apply
   #----------------------------------------------------------------------------
-  # Applies the Terraform plan to create/modify infrastructure.
-  #
-  # INDUSTRY CONTEXT:
-  # Apply stage safeguards:
-  # - Only runs on main branch (not PRs)
-  # - Requires manual approval via GitHub Environment
-  # - Uses the saved plan file (no drift between plan and apply)
-  # - Logs all actions for audit trail
-  #----------------------------------------------------------------------------
-
   apply:
     name: "Terraform Apply"
     runs-on: ubuntu-latest
     needs: plan
     
-    # Only run apply on push to main or manual dispatch with apply action
     if: |
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
 
-    # GitHub Environment for manual approval
-    # You must create this environment in GitHub repo settings
     environment:
       name: ${{ github.event.inputs.environment || 'dev' }}
 
@@ -420,40 +245,9 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
 
-      - name: Post Apply Status
+      - name: Post Apply Summary
         if: always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const status = '${{ job.status }}';
-            const icon = status === 'success' ? '✅' : '❌';
-            
-            const body = `## ${icon} Terraform Apply - ${status.toUpperCase()}
-            
-            **Environment:** \`${{ env.TF_ENVIRONMENT }}\`
-            **Triggered by:** @${{ github.actor }}
-            **Commit:** ${{ github.sha }}
-            
-            *Applied at ${new Date().toISOString()}*`;
-            
-            // Create a commit comment
-            github.rest.repos.createCommitComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              commit_sha: context.sha,
-              body: body
-            });
-```
-
----
-
-## Setup Instructions
-
-### Step 1: Create the Workflow File
-
-Place this file at:
-```
-TERRAFORM CI-CD PIPELINE/
-└── .github/
-    └── workflows/
-        └── terraform.yml
+        run: |
+          echo "## Terraform Apply Complete" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ env.TF_ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
