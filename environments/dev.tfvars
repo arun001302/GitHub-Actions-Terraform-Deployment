@@ -47,7 +47,7 @@ instance_type         = "t3.micro" # Free tier eligible
 instance_count        = 1
 instance_architecture = "x86_64"
 
-root_volume_size       = 20   # Minimum practical size
+root_volume_size       = 30   # Minimum practical size
 root_volume_iops       = 3000 # GP3 baseline (free)
 root_volume_throughput = 125  # GP3 baseline (free)
 
