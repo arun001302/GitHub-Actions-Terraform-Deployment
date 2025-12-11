@@ -1,0 +1,105 @@
+#------------------------------------------------------------------------------
+# Terraform Destroy Pipeline
+#------------------------------------------------------------------------------
+# Manually triggered workflow to tear down infrastructure.
+#
+# INDUSTRY CONTEXT:
+# Destroy workflows should:
+# - Require manual trigger (never automatic)
+# - Require environment selection
+# - Have confirmation step
+# - Be restricted to authorized users
+#------------------------------------------------------------------------------
+
+name: "Terraform Destroy"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to destroy'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      confirm:
+        description: 'Type "destroy" to confirm'
+        required: true
+        type: string
+
+env:
+  TF_VERSION: "1.5.7"
+  AWS_REGION: "us-east-1"
+  TF_ENVIRONMENT: ${{ github.event.inputs.environment }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  #----------------------------------------------------------------------------
+  # Job 1: Validate Confirmation
+  #----------------------------------------------------------------------------
+  validate:
+    name: "Validate Confirmation"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check Confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "destroy" ]; then
+            echo "::error::You must type 'destroy' to confirm"
+            exit 1
+          fi
+          echo "✅ Confirmation validated"
+
+  #----------------------------------------------------------------------------
+  # Job 2: Destroy Infrastructure
+  #----------------------------------------------------------------------------
+  destroy:
+    name: "Terraform Destroy"
+    runs-on: ubuntu-latest
+    needs: validate
+
+    environment:
+      name: ${{ github.event.inputs.environment }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-terraform-destroy
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Select Workspace
+        run: |
+          terraform workspace select ${{ env.TF_ENVIRONMENT }} || \
+          terraform workspace new ${{ env.TF_ENVIRONMENT }}
+
+      - name: Terraform Destroy
+        run: |
+          terraform destroy -auto-approve \
+            -var-file=environments/${{ env.TF_ENVIRONMENT }}.tfvars
+
+      - name: Post Destroy Summary
+        if: always()
+        run: |
+          echo "## 🗑️ Terraform Destroy Complete" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ env.TF_ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
