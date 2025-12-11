@@ -67,8 +67,8 @@ db_instance_class = "db.t3.micro" # Smallest RDS instance
 
 db_allocated_storage     = 20   # Minimum for GP3
 db_max_allocated_storage = 50   # Allow some autoscaling
-db_storage_iops          = 3000 # GP3 baseline
-db_storage_throughput    = 125  # GP3 baseline
+db_storage_iops          = null # GP3 baseline
+db_storage_throughput    = null  # GP3 baseline
 
 db_name     = "appdb"
 db_username = "dbadmin"

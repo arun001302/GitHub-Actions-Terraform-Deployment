@@ -3,20 +3,6 @@
 #------------------------------------------------------------------------------
 # Creates IAM resources for GitHub Actions to authenticate with AWS
 # using OIDC (OpenID Connect) - no long-lived access keys needed!
-#
-# INDUSTRY CONTEXT:
-# OIDC is the recommended way to authenticate CI/CD with AWS because:
-# - No secrets to rotate or manage
-# - Credentials are temporary (minutes, not forever)
-# - Can restrict access by repo, branch, environment
-# - Full audit trail in CloudTrail
-#
-# SECURITY:
-# The trust policy is critical - it defines WHO can assume this role.
-# We restrict it to:
-# - Specific GitHub repository
-# - Specific branches (optional)
-# - Specific environments (optional)
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
@@ -28,20 +14,12 @@ data "aws_caller_identity" "current" {}
 #------------------------------------------------------------------------------
 # GitHub OIDC Provider
 #------------------------------------------------------------------------------
-# This tells AWS to trust tokens issued by GitHub.
-# You only need ONE provider per AWS account, regardless of how many repos.
-#
-# IMPORTANT: If you already have a GitHub OIDC provider in your account,
-# you can comment out this resource and reference the existing one.
-#------------------------------------------------------------------------------
 
 resource "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 
   client_id_list = ["sts.amazonaws.com"]
 
-  # GitHub's OIDC thumbprint
-  # This is GitHub's certificate thumbprint - it's public and stable
   thumbprint_list = ["ffffffffffffffffffffffffffffffffffffffff"]
 
   tags = {
@@ -54,14 +32,11 @@ resource "aws_iam_openid_connect_provider" "github" {
 #------------------------------------------------------------------------------
 # IAM Role for GitHub Actions
 #------------------------------------------------------------------------------
-# This role is what GitHub Actions assumes to get AWS credentials.
-#------------------------------------------------------------------------------
 
 resource "aws_iam_role" "github_actions" {
   name        = var.github_actions_role_name
   description = "IAM role for GitHub Actions to deploy infrastructure via Terraform"
 
-  # Trust policy - defines WHO can assume this role
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -76,12 +51,6 @@ resource "aws_iam_role" "github_actions" {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           }
           StringLike = {
-            # Restrict to specific repository
-            # Format: repo:OWNER/REPO:*
-            # Examples:
-            #   "repo:myuser/myrepo:*"                    - Any branch/event
-            #   "repo:myuser/myrepo:ref:refs/heads/main"  - Only main branch
-            #   "repo:myuser/myrepo:environment:prod"     - Only prod environment
             "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:*"
           }
         }
@@ -99,16 +68,6 @@ resource "aws_iam_role" "github_actions" {
 
 #------------------------------------------------------------------------------
 # IAM Policy for Terraform Operations
-#------------------------------------------------------------------------------
-# Defines WHAT the GitHub Actions role can do in AWS.
-#
-# INDUSTRY CONTEXT:
-# This is a broad policy suitable for Terraform deployments.
-# In production, you might want to:
-# - Restrict to specific resource types
-# - Restrict to specific resource name patterns
-# - Use permission boundaries
-# - Separate read-only (plan) from write (apply) roles
 #------------------------------------------------------------------------------
 
 resource "aws_iam_policy" "github_actions_terraform" {
@@ -193,9 +152,12 @@ resource "aws_iam_policy" "github_actions_terraform" {
           "iam:CreateInstanceProfile",
           "iam:DeleteInstanceProfile",
           "iam:GetInstanceProfile",
+          "iam:TagInstanceProfile",
+          "iam:UntagInstanceProfile",
           "iam:AddRoleToInstanceProfile",
           "iam:RemoveRoleFromInstanceProfile",
           "iam:ListInstanceProfilesForRole",
+          "iam:ListInstanceProfileTags",
           "iam:PassRole",
           "iam:CreatePolicy",
           "iam:DeletePolicy",
@@ -225,7 +187,8 @@ resource "aws_iam_policy" "github_actions_terraform" {
           "secretsmanager:UntagResource",
           "secretsmanager:GetResourcePolicy",
           "secretsmanager:PutResourcePolicy",
-          "secretsmanager:DeleteResourcePolicy"
+          "secretsmanager:DeleteResourcePolicy",
+          "secretsmanager:RestoreSecret"
         ]
         Resource = "*"
       },
@@ -262,7 +225,58 @@ resource "aws_iam_policy" "github_actions_terraform" {
           "kms:UntagResource",
           "kms:CreateAlias",
           "kms:DeleteAlias",
-          "kms:ListAliases"
+          "kms:ListAliases",
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:GenerateDataKey"
+        ]
+        Resource = "*"
+      },
+
+      #------------------------------------------------------------------------
+      # ELB/ALB Permissions
+      #------------------------------------------------------------------------
+      {
+        Sid    = "ELB"
+        Effect = "Allow"
+        Action = [
+          "elasticloadbalancing:*"
+        ]
+        Resource = "*"
+      },
+
+      #------------------------------------------------------------------------
+      # Auto Scaling Permissions
+      #------------------------------------------------------------------------
+      {
+        Sid    = "AutoScaling"
+        Effect = "Allow"
+        Action = [
+          "autoscaling:*"
+        ]
+        Resource = "*"
+      },
+
+      #------------------------------------------------------------------------
+      # SNS Permissions (for alarms)
+      #------------------------------------------------------------------------
+      {
+        Sid    = "SNS"
+        Effect = "Allow"
+        Action = [
+          "sns:*"
+        ]
+        Resource = "*"
+      },
+
+      #------------------------------------------------------------------------
+      # SSM Permissions
+      #------------------------------------------------------------------------
+      {
+        Sid    = "SSM"
+        Effect = "Allow"
+        Action = [
+          "ssm:*"
         ]
         Resource = "*"
       }
@@ -301,34 +315,4 @@ output "github_actions_role_name" {
 output "oidc_provider_arn" {
   description = "ARN of the GitHub OIDC provider"
   value       = aws_iam_openid_connect_provider.github.arn
-}
-
-output "github_actions_setup_instructions" {
-  description = "Instructions for configuring GitHub Actions"
-  value       = <<-EOT
-
-    ============================================================
-    GITHUB ACTIONS SETUP INSTRUCTIONS
-    ============================================================
-
-    1. Go to your GitHub repository:
-       https://github.com/${var.github_repository}/settings/secrets/actions
-
-    2. Click "New repository secret"
-
-    3. Add the following secret:
-       Name:  AWS_ROLE_ARN
-       Value: ${aws_iam_role.github_actions.arn}
-
-    4. Create GitHub Environments (optional but recommended):
-       https://github.com/${var.github_repository}/settings/environments
-
-       - Create "dev" environment (no protection rules)
-       - Create "staging" environment (optional: require reviewers)
-       - Create "prod" environment (require reviewers)
-
-    5. Your GitHub Actions workflow can now authenticate with AWS!
-
-    ============================================================
-  EOT
 }
