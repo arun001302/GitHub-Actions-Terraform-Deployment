@@ -231,19 +231,18 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: github-actions-terraform
 
-      - name: Download Plan Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: terraform-plan-${{ env.TF_ENVIRONMENT }}
-
       - name: Terraform Init
         run: terraform init
 
       - name: Select Workspace
-        run: terraform workspace select ${{ env.TF_ENVIRONMENT }}
+        run: |
+          terraform workspace select ${{ env.TF_ENVIRONMENT }} || \
+          terraform workspace new ${{ env.TF_ENVIRONMENT }}
 
       - name: Terraform Apply
-        run: terraform apply -auto-approve tfplan
+        run: |
+          terraform apply -auto-approve \
+            -var-file=environments/${{ env.TF_ENVIRONMENT }}.tfvars
 
       - name: Post Apply Summary
         if: always()
