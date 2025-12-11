@@ -2,11 +2,6 @@
 # Compute Module - Main Configuration
 #------------------------------------------------------------------------------
 # Creates EC2 instances and launch templates for application servers.
-#
-# INDUSTRY CONTEXT:
-# This module demonstrates two patterns:
-# 1. Direct EC2 Instance - Simple, immediate, good for dev/learning
-# 2. Launch Template - Production-ready, enables Auto Scaling Groups
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
@@ -19,6 +14,37 @@ locals {
   })
 
   name_prefix = "${var.environment}-app"
+
+  default_user_data = <<-EOF
+    #!/bin/bash
+    set -e
+
+    # Update system packages
+    dnf update -y
+
+    # Install common utilities
+    dnf install -y \
+      htop \
+      vim \
+      curl \
+      wget \
+      jq \
+      unzip
+
+    # Install and start SSM agent
+    systemctl enable amazon-ssm-agent
+    systemctl start amazon-ssm-agent
+
+    # Install CloudWatch agent
+    dnf install -y amazon-cloudwatch-agent
+
+    # Create application directory
+    mkdir -p /opt/app
+    chown ec2-user:ec2-user /opt/app
+
+    # Log completion
+    echo "User data script completed at $(date)" >> /var/log/user-data.log
+  EOF
 }
 
 #------------------------------------------------------------------------------
@@ -51,7 +77,7 @@ data "aws_ami" "amazon_linux" {
 }
 
 #------------------------------------------------------------------------------
-# Data Source: Graviton AMI (ARM64)
+# Data Source: Graviton AMI (ARM64) - Optional
 #------------------------------------------------------------------------------
 
 data "aws_ami" "amazon_linux_arm" {
@@ -94,7 +120,8 @@ resource "aws_launch_template" "app" {
     name = var.instance_profile_name
   }
 
-  vpc_security_group_ids = [var.security_group_id]
+  # NOTE: Security groups are set on the instance, not here
+  # This avoids the "Network interfaces and instance-level security groups" conflict
 
   monitoring {
     enabled = var.enable_detailed_monitoring
@@ -115,7 +142,7 @@ resource "aws_launch_template" "app" {
 
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "required" # Require IMDSv2
+    http_tokens                 = "required"
     http_put_response_hop_limit = 1
     instance_metadata_tags      = "enabled"
   }
@@ -146,56 +173,39 @@ resource "aws_launch_template" "app" {
 }
 
 #------------------------------------------------------------------------------
-# Default User Data Script
-#------------------------------------------------------------------------------
-
-locals {
-  default_user_data = <<-EOF
-    #!/bin/bash
-    set -e
-
-    # Update system packages
-    dnf update -y
-
-    # Install common utilities
-    dnf install -y \
-      htop \
-      vim \
-      curl \
-      wget \
-      jq \
-      unzip
-
-    # Install and start SSM agent
-    systemctl enable amazon-ssm-agent
-    systemctl start amazon-ssm-agent
-
-    # Install CloudWatch agent
-    dnf install -y amazon-cloudwatch-agent
-
-    # Create application directory
-    mkdir -p /opt/app
-    chown ec2-user:ec2-user /opt/app
-
-    # Log completion
-    echo "User data script completed at $(date)" >> /var/log/user-data.log
-  EOF
-}
-
-#------------------------------------------------------------------------------
 # EC2 Instance
 #------------------------------------------------------------------------------
 
 resource "aws_instance" "app" {
   count = var.instance_count
 
-  launch_template {
-    id      = aws_launch_template.app.id
-    version = "$Latest"
-  }
+  ami                  = var.instance_architecture == "arm64" ? data.aws_ami.amazon_linux_arm.id : data.aws_ami.amazon_linux.id
+  instance_type        = var.instance_type
+  iam_instance_profile = var.instance_profile_name
 
   subnet_id                   = var.subnet_ids[count.index % length(var.subnet_ids)]
+  vpc_security_group_ids      = [var.security_group_id]
   associate_public_ip_address = var.associate_public_ip
+
+  root_block_device {
+    volume_size           = var.root_volume_size
+    volume_type           = "gp3"
+    encrypted             = true
+    delete_on_termination = true
+    iops                  = var.root_volume_iops
+    throughput            = var.root_volume_throughput
+  }
+
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+    instance_metadata_tags      = "enabled"
+  }
+
+  user_data = var.user_data != "" ? base64encode(var.user_data) : base64encode(local.default_user_data)
+
+  monitoring = var.enable_detailed_monitoring
 
   tags = merge(local.common_tags, {
     Name = var.instance_count > 1 ? "${local.name_prefix}-server-${count.index + 1}" : "${local.name_prefix}-server"
